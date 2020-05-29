@@ -1,19 +1,18 @@
 # PNKH-B: A Projected Newton-Krylov Method for Large-Scale Bound-Constrained Optimization Problems
 
-Kelvin Kan, Samy Wu Fung and Lars Ruthotto
+## References
 
-## Dependencies
+A detailed description of our method can be found in
 
-The MNIST example requires the current version of [NumDL-MATLAB](https://github.com/IPAIopen/NumDL-MATLAB) 
+    @article{Kan2020,
+      title = {PNKH-B: A Projected Newton-Krylov Method for Large-Scale Bound-Constrained Optimization},
+      year = {2020},
+      journal = {arXiv preprint arXiv:2005.13639},
+      author = {K. Kan, S. Wu Fung, L. Ruthotto},
+      pages = {20 pages},
+      url={https://arxiv.org/abs/2005.13639}
+    }
 
-## How to run the MNIST example
-
-The MNIST example is the numerical experiment reported in Section 5.3 of our paper
-
-- Download [NumDL-MATLAB](https://github.com/IPAIopen/NumDL-MATLAB) 
-- replace NumDL-MATLAB\classification\classObjFun.m by PNKH-B\tests\classObjFun.m 
-- replace NumDL-MATLAB-master\test\Rosenbrock.m by PNKH-B\tests\Rosenbrock.m
-- run PNKH-B\tests\driver_MNISTexample.m
 
 ## Acknowledgements
 
