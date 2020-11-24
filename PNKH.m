@@ -24,31 +24,34 @@ function [xc,his,xAll] = PNKH(fun,xc,varargin)
 % cgTol          - CG tolerance
 % qpTol          - Quadratic programming tolerance
 % qpIter         - Quadratic programm MaxIter
-% maxIterCG      - numbers of CG iteration as a vector
-% out            - print option, 0-> don't print, 1-> print each iteration  
-% alpha          - line search parameter
-% epsilon        - width of the boundary
-% maxStep        - max step size
-% factor_c       - factor for Hessian shift in the orthogonal complement
-% (if specified, we will shift H by factor_c*smallest eigenvalue of T)
-% (if not specified, we will shift H by the smallest eigenvalue of T)
+% maxIterCG      - Numbers of CG iteration as a vector
+% out            - Print option, 0-> don't print, 1-> print each iteration  
+% alpha          - Line search parameter
+% epsilon        - Width of the boundary
+% maxStep        - Max step size
+% factor_c       - Factor for Hessian shift in the orthogonal complement
+% (if specified, we will shift H by factor_c*largest eigenvalue of T)
+% (if not specified, we will shift H by c)
 
-% low            - lower bound, put a large negative number if no bound
-% up             - upper bound, put a large positive number if no bound
-% indexing       - indexing method
+% c              - Constant for Hessian shift in the orthogonal complement
+% (The shift is implemented if factor_c is not specified)
+
+% low            - Lower bound, put a large negative number if no bound
+% up             - Upper bound, put a large positive number if no bound
+% indexing       - Indexing method
 % quadProgSolver - QP solver
 %
 % Outputs
 %
-% xc   - optimal variable
-% his  - structure containing the history of iterations
+% xc   - Optimal variable
+% his  - Structure containing the history of iterations
 %        his.str: corresponding value in each column
 %        his.obj: values of history of iterations,
 %        each row is one iteration and is
 %        [objtive function value, norm of restricted gradient, ...
 %        percentage of active variables, CG relative error, ...
 %        training error, validation error, mu, number of function evaluations];
-% xAll - collection of all x's at all iterations
+% xAll - Collection of all x's at all iterations
 
 if nargin==0
    E = @(x,varargin) Rosenbrock(x);
@@ -84,13 +87,15 @@ qpTol          = 1e-12;                   %Quadratic programming tolerance
 qpIter         = 200;                     %Quadratic programm MaxIter
 maxIterCG      = ones(1,10)*9;            %number of CG iterations
 out            = 1;                       %print option
-alpha          = 0.1;                     %line search parameter
+alpha          = 0;                       %line search parameter
 epsilon        = 1e-6;                    %width of the boundary
 maxStep        = inf;                     %max step size
+c              = 1e-3;                    %constant for Hessian shift
 low            = -1e16*ones(size_prob,1); %lower bound
 up             = 1e16*ones(size_prob,1);  %upper bound
-indexing       = 'Augmented';               %indexing method
+indexing       = 'Augmented';             %indexing method
 quadProgSolver = 'interiorQP';            %QP solver
+
 for k=1:2:length(varargin) % overwrites default parameter
   eval([varargin{k},'=varargin{',int2str(k+1),'};']);
 end
@@ -146,7 +151,6 @@ for j=1:maxIter
         if nargout>2; xAll = [xAll xc]; end;
         [Activedf, Activeidx] = projectGradient(df,xc,low,up);
         
-
         [T,V] = lanczosTridiag(PCH,MLinv(df(Fk)),maxCG,cgTol,1);
 
         s(Fk) = MRinv(V*(T\(V'*MLinv(-df(Fk)))));
@@ -155,21 +159,14 @@ for j=1:maxIter
         [eig_V, eig_D] = eig(T);
         V = V*eig_V;
         
-        [c, min_idx] = min(diag(eig_D));
-        
         if exist('factor_c', 'var')
-            c = c*factor_c;
-        else
-            V(:,min_idx)=[];
-            eig_D(:,min_idx)=[]; eig_D(min_idx,:)=[];
+            c = eig_D(end,end)*factor_c;
         end
 
         T = eig_D-c*eye(size(eig_D,1));
         
-        R = chol(T); VRT = V*R'; % define this here so that we dont have to do it in each IPM
         LowRankH    = @(v,s) V*(T*(V'*v))+s.*v;
-        Identity_map = @(x) x;
-        LowRankHinv = @(v,s) LowRankHinv_temp(v, s, V, T, Identity_map, Identity_map, VRT);
+        LowRankHinv = @(v,s) LowRankHinv_temp(v, s, V, T);
 
         CGrelerr = norm(PCH(MR(s(Fk)))+MLinv(df(Fk)))/norm(MLinv(df(Fk))); 
         his.obj(j,1:end-2) = [fc,norm(Activedf),nnz(Activeidx)/numel(xc),CGrelerr,Err];
@@ -364,7 +361,7 @@ function x = MLinv_temp(v, size_prob, MLwholeinv, Fk)
     x = x(Fk,:);
 end
 
-function x = LowRankHinv_temp(v, s, V, T, MRinv, MLinv, VRT)
+function x = LowRankHinv_temp(v, s, V, T)
     % The inverse of the low-rank approximated Hessian (function handle)
     % Required inputs:
     % v            - vector with length equals to Fk
@@ -377,11 +374,10 @@ function x = LowRankHinv_temp(v, s, V, T, MRinv, MLinv, VRT)
     % Output:
     % x            - (V*T*V'+diag(s))^(-1)*v
     if norm(s) == 0
-        x = MRinv(V*(T\(V'*MLinv(v))));
+        x = V*(T\(V'*v));
     else
-        opts.SYM = true; opts.POSDEF = true;
-        sinv = s.^(-1); low_rank = size(VRT,2);
-        x = linsolve(VRT'*(sinv.*VRT)+eye(low_rank),VRT'*(sinv.*v),opts);
-        x = sinv .* v - sinv .* (VRT*x); 
+        v1 = v./s;
+        v2 = (inv(T)+V'*diag(sparse(1./s))*V)\(V'*v1);
+        x = v1 - (V*v2)./s;
     end
 end
