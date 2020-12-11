@@ -49,9 +49,9 @@ function [xc,his,xAll] = PNCG(fun,xc,varargin)
 if nargin==0
    E = @(x,varargin) Rosenbrock(x);
    W = [2;2];
-   [xc,his,xAll] = feval(mfilename,E,W,'maxIter',40,...
+   [xc,his,xAll] = feval(mfilename,E,W,'maxIterCG',ones(1,40)*2,...
                     'low',1.3*ones(2,1),'up',2.2*ones(2,1),'cgTol',1e-16,...
-                    'indexing', 'Epsilon', 'xTol', 1e-10);
+                    'indexing', 'Augmented', 'xTol', 1e-10);
    fprintf('numerical solution: x = [%1.4f, %1.4f]\n',xc);
    figure(1); clf;
    subplot(1,2,1)
@@ -77,15 +77,14 @@ warning('off', 'MATLAB:pcg:tooSmallTolerance')
 xTol           = 1e-6;                    %Relative change tolerance
 gTol           = 1e-8;                    %Projected gradient tolerance
 cgTol          = 1e-16;                   %CG tolerance
-maxIterCG      = 10;                      %number of CG iterations
+maxIterCG      = ones(1,10)*10;           %number of CG iterations
 out            = 1;                       %print option
 alpha          = 0.1;                     %line search parameter
 epsilon        = 1e-6;                    %width of the boundary
-maxIter        = 20;                      %max number of iterations
 maxStep        = inf;                     %max step size
 low            = -1e16*ones(size_prob,1); %lower bound
 up             = 1e16*ones(size_prob,1);  %upper bound
-indexing       = 'Epsilon';               %indexing method
+indexing       = 'Augmented';             %indexing method
 
 for k=1:2:length(varargin)     % overwrites default parameter
   eval([varargin{k},'=varargin{',int2str(k+1),'};']);
@@ -93,6 +92,7 @@ end
 
 xAll = [];
 [fc,df,H,MRwholeinv,MLwholeinv,~,~,Err] = fun(xc);
+maxIter = numel(maxIterCG);
 mu = 1; 
 
 if isempty(Err)
@@ -104,17 +104,18 @@ else
 end
 his.obj = zeros(maxIter+1,6+2*(~isempty(Err)));
 if out==1
-    fprintf('=== %s (maxIter: %d, maxIterCG=%d, cgTol=%1.2e) ===\n',mfilename,maxIter,maxIterCG,cgTol);
+    fprintf('=== %s (maxIter: %d, maxIterCG=%d, cgTol=%1.2e) ===\n',mfilename,maxIter,maxIterCG(1),cgTol);
     fprintf(his.str);
 end
 
 for j=1:maxIter
+    maxCG = maxIterCG(j);
     s = zeros(size_prob, 1);
     switch indexing
         case 'Boundary'
             Jk = (xc <= low + epsilon) | (xc >= up - epsilon);
             Fk = not(Jk); 
-        case 'Epsilon'
+        case 'Augmented'
             Jk = ((xc <= low + epsilon) & (df > 0)) | ...  
                      ((xc>= up - epsilon) & (df < 0));
             Fk = not(Jk);                                       
@@ -128,7 +129,7 @@ for j=1:maxIter
     
     if nargout>2; xAll = [xAll xc]; end;
     
-    [sTemp,FLAG,RELRES,ITER,RESVEC] = pcg(PCH,-MLinv(df(Fk)),cgTol,maxIterCG);
+    [sTemp,FLAG,RELRES,ITER,RESVEC] = pcg(PCH,-MLinv(df(Fk)),cgTol,maxCG);
     
     s(Fk) = MRinv(sTemp);
     
@@ -162,7 +163,7 @@ for j=1:maxIter
             ga = -df(xc >= up);
             if max(abs(ga)) > maxsFK, ga = ga/max(abs(ga))*maxsFK; end
             s(xc >= up) = ga;
-        case 'Epsilon' %Rescale gradient based on epsilon of epsilon index
+        case 'Augmented' %Rescale gradient based on epsilon of augmented index
             ga = s_Jk(s_Jk<0);
             if max(abs(ga)) > maxsFK, ga = ga/max(abs(ga))*maxsFK; end
             s_Jk(s_Jk<0) = ga;

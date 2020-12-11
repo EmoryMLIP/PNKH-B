@@ -24,36 +24,41 @@ function [xc,his,xAll] = PNKH(fun,xc,varargin)
 % cgTol          - CG tolerance
 % qpTol          - Quadratic programming tolerance
 % qpIter         - Quadratic programm MaxIter
-% maxIterCG      - number of CG iteration
-% out            - print option, 0-> don't print, 1-> print each iteration  
-% alpha          - line search parameter
-% epsilon        - width of the boundary
-% maxIter        - max number of iterations
-% maxStep        - max step size
-% c              - Hessian shift
-% low            - lower bound, put a large negative number if no bound
-% up             - upper bound, put a large positive number if no bound
-% indexing       - indexing method
+% maxIterCG      - Numbers of CG iteration as a vector
+% out            - Print option, 0-> don't print, 1-> print each iteration  
+% alpha          - Line search parameter
+% epsilon        - Width of the boundary
+% maxStep        - Max step size
+% factor_c       - Factor for Hessian shift in the orthogonal complement
+% (if specified, we will shift H by factor_c*largest eigenvalue of T)
+% (if not specified, we will shift H by c)
+
+% c              - Constant for Hessian shift in the orthogonal complement
+% (The shift is implemented if factor_c is not specified)
+
+% low            - Lower bound, put a large negative number if no bound
+% up             - Upper bound, put a large positive number if no bound
+% indexing       - Indexing method
 % quadProgSolver - QP solver
 %
 % Outputs
 %
-% xc   - optimal variable
-% his  - structure containing the history of iterations
+% xc   - Optimal variable
+% his  - Structure containing the history of iterations
 %        his.str: corresponding value in each column
 %        his.obj: values of history of iterations,
 %        each row is one iteration and is
 %        [objtive function value, norm of restricted gradient, ...
 %        percentage of active variables, CG relative error, ...
 %        training error, validation error, mu, number of function evaluations];
-% xAll - collection of all x's at all iterations
+% xAll - Collection of all x's at all iterations
 
 if nargin==0
    E = @(x,varargin) Rosenbrock(x);
    W = [2;2];
-   [xc,his,xAll] = feval(mfilename,E,W,'maxIter',20,...
+   [xc,his,xAll] = feval(mfilename,E,W,...
                     'low',1.3*ones(2,1),'up',2.2*ones(2,1),'cgTol',1e-16,...
-                    'indexing', 'Epsilon');
+                    'indexing', 'Augmented');
    fprintf('numerical solution: x = [%1.4f, %1.4f]\n',xc);
    figure(1); clf;
    subplot(1,2,1)
@@ -80,24 +85,24 @@ gTol           = 1e-8;                    %Projected gradient tolerance
 cgTol          = 1e-16;                   %CG tolerance
 qpTol          = 1e-12;                   %Quadratic programming tolerance
 qpIter         = 200;                     %Quadratic programm MaxIter
-maxIterCG      = 9;                       %number of CG iterations
+maxIterCG      = ones(1,10)*9;            %number of CG iterations
 out            = 1;                       %print option
-alpha          = 0.1;                     %line search parameter
+alpha          = 0;                       %line search parameter
 epsilon        = 1e-6;                    %width of the boundary
-maxIter        = 20;                      %max number of iterations
 maxStep        = inf;                     %max step size
-c              = 1e-3;                    %Hessian shift
+c              = 1e-3;                    %constant for Hessian shift
 low            = -1e16*ones(size_prob,1); %lower bound
 up             = 1e16*ones(size_prob,1);  %upper bound
-indexing       = 'Epsilon';               %indexing method
+indexing       = 'Augmented';             %indexing method
 quadProgSolver = 'interiorQP';            %QP solver
+
 for k=1:2:length(varargin) % overwrites default parameter
   eval([varargin{k},'=varargin{',int2str(k+1),'};']);
 end
-maxIterCG = maxIterCG + 1; %Lanczos counts one less iteration
-                           %when compared to CG
+
 xAll = [];
 [fc,df,H,MRwholeinv,MLwholeinv,MRwhole,MLwhole,Err] = fun(xc);
+maxIter = numel(maxIterCG);
 mu = 1; 
 
 if isempty(Err)
@@ -110,17 +115,20 @@ end
 his.obj = zeros(maxIter+1,6+2*(~isempty(Err)));
 
 if out==1
-    fprintf('=== %s (maxIter: %d, maxIterCG=%d, cgTol=%1.2e, qpTol=%1.2e) ===\n',mfilename,maxIter,maxIterCG-1,cgTol,qpTol);
+    fprintf('=== %s (maxIter: %d, maxIterCG(1)=%d, cgTol=%1.2e, qpTol=%1.2e) ===\n',mfilename,maxIter,maxIterCG(1),cgTol,qpTol);
     fprintf(his.str);
 end
 
 for j=1:maxIter
+    r = maxIterCG(j);
+    maxCG = r + 1; %Lanczos counts one less iteration
+                           %when compared to CG
     s = zeros(size_prob, 1);
     switch indexing
         case 'Boundary'
             Jk = (xc <= low + epsilon) | (xc >= up - epsilon);
             Fk = not(Jk); 
-        case 'Epsilon'
+        case 'Augmented'
             Jk = ((xc <= low + epsilon) & (df > 0)) | ...  
                      ((xc>= up - epsilon) & (df < 0));
             Fk = not(Jk);                                         
@@ -141,20 +149,29 @@ for j=1:maxIter
         PCH = @(v) rest_Hess(v,H,Fk,size_prob,MRinv,MLinv);
 
         if nargout>2; xAll = [xAll xc]; end;
+        [Activedf, Activeidx] = projectGradient(df,xc,low,up);
+        
+        [T,V] = lanczosTridiag(PCH,MLinv(df(Fk)),maxCG,cgTol,1);
 
-        [T,V] = lanczosTridiag(PCH,-MLinv(df(Fk)),maxIterCG,cgTol,1);
-        R = chol(T); VRT = ML(V*R'); % define this here so that we dont have to do it in each IPM
+        s(Fk) = MRinv(V*(T\(V'*MLinv(-df(Fk)))));
+        [V, QR_R] = qr(ML(V), 0);
+        T = QR_R*T*QR_R';
+        [eig_V, eig_D] = eig(T);
+        V = V*eig_V;
+        
+        if exist('factor_c', 'var')
+            c = eig_D(end,end)*factor_c;
+        end
 
-        LowRankH    = @(v,s) ML(V*(T*(V'*MR(v))))+s.*v;
-        LowRankHinv = @(v,s) LowRankHinv_temp(v, s, V, T, MRinv, MLinv, VRT);
-
-        s(Fk) = LowRankHinv(-df(Fk),zeros(size(size_prob,1)));
+        T = eig_D-c*eye(size(eig_D,1));
+        
+        LowRankH    = @(v,s) V*(T*(V'*v))+s.*v;
+        LowRankHinv = @(v,s) LowRankHinv_temp(v, s, V, T);
 
         CGrelerr = norm(PCH(MR(s(Fk)))+MLinv(df(Fk)))/norm(MLinv(df(Fk))); 
+        his.obj(j,1:end-2) = [fc,norm(Activedf),nnz(Activeidx)/numel(xc),CGrelerr,Err];
         % Compute Lanczos relative error (consistent with Matlab pcg)
 
-        [Activedf, Activeidx] = projectGradient(df,xc,low,up);
-        his.obj(j,1:end-2) = [fc,norm(Activedf),nnz(Activeidx)/numel(xc),CGrelerr,Err];
         if out==1; fprintf(his.val,j,his.obj(j,1:end-2)); end
         
         if his.obj(j,2) < gTol %if projected gradient is too small, stop
@@ -182,7 +199,7 @@ for j=1:maxIter
                 ga = -df(xc >= up - epsilon);
                 if max(abs(ga)) > max(abs(s(Fk))), ga = ga/max(abs(ga))*max(abs(s(Fk))); end
                 s(xc >= up - epsilon) = ga;
-            case 'Epsilon' %Rescale gradient based on epsilon of epsilon index
+            case 'Augmented' %Rescale gradient based on epsilon of augmented index
                 ga = s_Jk(s_Jk<0);
                 if max(abs(ga)) > epsilon, ga = ga/max(abs(ga))*epsilon; end
                 s_Jk(s_Jk<0) = ga;
@@ -344,7 +361,7 @@ function x = MLinv_temp(v, size_prob, MLwholeinv, Fk)
     x = x(Fk,:);
 end
 
-function x = LowRankHinv_temp(v, s, V, T, MRinv, MLinv, VRT)
+function x = LowRankHinv_temp(v, s, V, T)
     % The inverse of the low-rank approximated Hessian (function handle)
     % Required inputs:
     % v            - vector with length equals to Fk
@@ -357,11 +374,10 @@ function x = LowRankHinv_temp(v, s, V, T, MRinv, MLinv, VRT)
     % Output:
     % x            - (V*T*V'+diag(s))^(-1)*v
     if norm(s) == 0
-        x = MRinv(V*(T\(V'*MLinv(v))));
+        x = V*(T\(V'*v));
     else
-        opts.SYM = true; opts.POSDEF = true;
-        sinv = s.^(-1); low_rank = size(VRT,2);
-        x = linsolve(VRT'*(sinv.*VRT)+eye(low_rank),VRT'*(sinv.*v),opts);
-        x = sinv .* v - sinv .* (VRT*x); 
+        v1 = v./s;
+        v2 = (inv(T)+V'*diag(sparse(1./s))*V)\(V'*v1);
+        x = v1 - (V*v2)./s;
     end
 end
